@@ -3,7 +3,7 @@ android {
     namespace 'com.ryzenic.rblx'
     compileSdk 34
     defaultConfig {
-        applicationId 'com.ryzenic.rblx'
+        applicationId 'com.tixxdev.ryzenic'
         minSdk 21
         targetSdk 34
         versionCode 1
