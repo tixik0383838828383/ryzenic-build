@@ -33,9 +33,10 @@ public class MainActivity extends Activity {
         web.setOverScrollMode(View.OVER_SCROLL_NEVER);
 
         // игра и библиотеки лежат в assets/www и отдаются по https://appassets.androidplatform.net/ — работает без интернета
+        final WebViewAssetLoader.AssetsPathHandler assets = new WebViewAssetLoader.AssetsPathHandler(this);
         final WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
-                .addPathHandler("/", new WebViewAssetLoader.AssetsPathHandler(this) {
-                    @Override public WebResourceResponse handle(String path) { return super.handle("www/" + path); }
+                .addPathHandler("/", new WebViewAssetLoader.PathHandler() {
+                    @Override public WebResourceResponse handle(String path) { return assets.handle("www/" + path); }
                 }).build();
         web.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
