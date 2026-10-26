@@ -1,0 +1,45 @@
+name: Build APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.7' }
+
+      # игра (game/index.html) + локальные three.js и cannon.js внутрь APK — без CDN и без интернета
+      - name: Prepare assets
+        run: |
+          mkdir -p app/src/main/assets/www
+          cp libs/three.min.js libs/cannon.min.js app/src/main/assets/www/
+          sed -e 's#https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js#three.min.js#' \
+              -e 's#https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js#cannon.min.js#' \
+              game/index.html > app/src/main/assets/www/index.html
+          grep -c 'src="three.min.js"' app/src/main/assets/www/index.html
+
+      - name: Build APK
+        run: gradle --no-daemon assembleRelease
+
+      - name: Rename
+        run: cp app/build/outputs/apk/release/app-release.apk RyzenicRblx.apk
+
+      - uses: actions/upload-artifact@v4
+        with: { name: RyzenicRblx-apk, path: RyzenicRblx.apk }
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Ryzenic Rblx (latest APK)
+          files: RyzenicRblx.apk
