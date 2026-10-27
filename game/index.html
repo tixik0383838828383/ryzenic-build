@@ -70,7 +70,7 @@
 
 
         /* ===== AVATAR EDITOR ===== */
-        #avatar-editor-overlay { position:absolute; top:0; left:0; width:100vw; height:100vh; background:rgba(15,15,30,0.98); z-index:150; display:none; flex-direction:column; font-family:'Courier New',Courier,monospace; }
+        #avatar-editor-overlay { position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(15,15,30,0.98); z-index:1200; display:none; flex-direction:column; font-family:'Courier New',Courier,monospace; }
         #av-header { background:#0a0a1a; padding:10px 14px; display:flex; align-items:center; justify-content:space-between; border-bottom:3px solid #ff0000; flex-shrink:0; }
         #av-header h2 { color:white; margin:0; font-size:1.1rem; text-shadow:2px 2px 0 #ff0000; letter-spacing:2px; }
         #av-close-btn { background:#ff0000; color:white; border:3px solid #fff; padding:7px 16px; font-size:0.9rem; font-weight:bold; cursor:pointer; border-radius:6px; box-shadow:3px 3px 0 #000; font-family:'Courier New',Courier,monospace; }
@@ -722,7 +722,7 @@
                         </div>
                     </div>
                 </div>
-                <button id="av-save-btn" onclick="saveAvatarEditor()">✔ SAVE & PLAY</button>
+                <button id="av-save-btn" onclick="saveAvatarEditor()">✔ SAVE</button>
             </div>
         </div>
     </div>
@@ -881,6 +881,8 @@
             shirt: null,
             pants: null
         };
+        try { const sv = JSON.parse(localStorage.getItem('ryzenicAvatar') || 'null'); if (sv && typeof sv === 'object') Object.keys(avatarConfig).forEach(k => { if (k in sv) avatarConfig[k] = sv[k]; }); } catch (e) {}
+        function saveAvatarConfig() { try { localStorage.setItem('ryzenicAvatar', JSON.stringify(avatarConfig)); } catch (e) {} }
         let avScene, avCamera, avRenderer, avPlayerGroup;
         let avActive = false, avIsDragging = false, avLastTouchX = 0, avAngleY = Math.PI;
 
@@ -2917,7 +2919,7 @@
                 if(el) el.classList.toggle('av-selected', avatarConfig.pants === (k==='none'?null:k));
             });
             switchAvatarTab('body');
-            setTimeout(initAvScene, 50);
+            setTimeout(() => { if (avActive) initAvScene(); }, 50);
         }
 
         function initAvScene() {
@@ -3002,7 +3004,8 @@
         function closeAvatarEditor() {
             avActive = false;
             document.getElementById('avatar-editor-overlay').style.display = 'none';
-            refreshHomeAvatar();
+            saveAvatarConfig();
+            refreshHomeAvatar();                 // иконка скина в главном меню обновляется
             if (avRenderer) { avRenderer.dispose(); avRenderer = null; }
             avScene = null; avCamera = null; avPlayerGroup = null;
         }
@@ -3306,6 +3309,7 @@
         function startGame(device) {
             initAudio();
             document.getElementById('rblx-homepage').style.display = 'none';
+            if (avActive) closeAvatarEditor();
             disposeHomeAvatar();
             document.getElementById('rblx-loading').style.display = 'none';
             document.getElementById('deviceSelect').style.display = 'none';
@@ -3461,6 +3465,7 @@
             name = name || 'Starter Place';
             currentGameMode = (name === 'Classic Obby') ? 'obby' : 'starter';
             document.getElementById('rblx-mob-drawer').classList.remove('open');
+            if (avActive) closeAvatarEditor();
             document.getElementById('rblx-load-place').textContent = name;
             const ls = document.getElementById('rblx-loading');
             ls.style.display = 'flex';
