@@ -1316,8 +1316,11 @@
             supportTimer -= delta;
             if (supportTimer <= 0) { supportTimer = 0.3; physSupportCheck(); }
         }
+        let lastJumpAt = 0;
         function doJump() {
             if (!canJump || !pBody || playerHealth <= 0) return;
+            const nowJ = performance.now(); if (nowJ - lastJumpAt < 350 || pBody.velocity.y > 3) return;   // защита от двойного прыжка
+            lastJumpAt = nowJ;
             pBody.velocity.y = jumpVel();
             canJump = false; coyoteTime = 0; isJumping = true; playSound('jump');
         }
@@ -2306,10 +2309,16 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
 
         // позиция/поворот/масштаб модели в ладони. Рука поднята вперёд (r6Pose ≈ 1.45): «вверх» мира = локальная -Z руки, «вперёд» = локальная -Y
         const TOOLS = {
-            sword:  { slot: 1, scale: 0.46, rot: [-Math.PI / 2, 0, 0],            off: [0, 0, -1.0], pos: [0, -1.55, 0], icon: '🗡️', cooldown: 450 },
-            bomb:   { slot: 2, scale: 0.8,  rot: [-Math.PI / 2, 0, 0],            off: [0, 0, 0],       pos: [0, -2.0, 0], icon: '💥', cooldown: 900 },
-            rocket: { slot: 3, scale: 0.9,  rot: [0, 0, -Math.PI / 2],            off: [0, 0, 0],       pos: [0, -2.0, 0.35], icon: '🚀', cooldown: 1600 }
+            sword:  { slot: 1, scale: 0.46, rot: [-Math.PI / 2, 0, 0], off: [0, 0, -1.0], pos: [0, -0.9, 0],  icon: '🗡️', cooldown: 0 },
+            bomb:   { slot: 2, scale: 0.8,  rot: [-Math.PI / 2, 0, 0], off: [0, 0, 0],      pos: [0, -1.3, 0],  icon: '💥', cooldown: 900 },
+            rocket: { slot: 3, scale: 0.9,  rot: [0, 0, -Math.PI / 2], roll: Math.PI, off: [0, 0, 0], pos: [0, -0.9, 0.3], icon: '🚀', cooldown: 1600 }
         };
+        // хваты меча как в Roblox: Up — клинок вверх, Out — клинок вперёд (выпад)
+        const SWORD_GRIPS = { up: { rot: [-Math.PI / 2, 0, 0], off: [0, 0, -1.0] }, out: { rot: [Math.PI, 0, 0], off: [0, -1.0, 0] } };
+        function setSwordGrip(holder, g) {
+            const G = SWORD_GRIPS[g], inner = holder.userData.inner;
+            inner.quaternion.setFromEuler(new THREE.Euler(G.rot[0], G.rot[1], G.rot[2])); inner.position.set(G.off[0], G.off[1], G.off[2]);
+        }
         let currentTool = null, toolAct = null; const toolReadyAt = { sword: 0, bomb: 0, rocket: 0 };
         let bombThrow = null, bombReadyAt = 0;   // (оставлены для совместимости)
 
@@ -2317,7 +2326,10 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
             arm.userData.tools = arm.userData.tools || {};
             if (arm.userData.tools[key]) return arm.userData.tools[key];
             const T = TOOLS[key], holder = new THREE.Group(), inner = toolMesh(key);
-            inner.scale.setScalar(T.scale); inner.rotation.set(T.rot[0], T.rot[1], T.rot[2]);
+            inner.scale.setScalar(T.scale);
+            const qb = new THREE.Quaternion().setFromEuler(new THREE.Euler(T.rot[0], T.rot[1], T.rot[2]));
+            if (T.roll) qb.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), T.roll));
+            inner.quaternion.copy(qb);
             inner.position.set(T.off[0], T.off[1], T.off[2]);
             holder.position.set(T.pos[0], T.pos[1], T.pos[2]); holder.add(inner); holder.visible = false;
             arm.add(holder); arm.userData.tools[key] = holder; holder.userData.inner = inner;
@@ -2334,14 +2346,25 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
         }
         function toggleBombSlot() { selectTool('bomb'); }
 
+        let lastSwordAt = -1e9;
         function useTool() {
-            if (!currentTool || isPaused || playerHealth <= 0 || toolAct) return;
-            const now = performance.now(); if (now < toolReadyAt[currentTool]) return;
+            if (!currentTool || isPaused || playerHealth <= 0) return;
+            const now = performance.now();
+            if (currentTool === 'sword') {
+                initAudio(); playerGroup.rotation.y = cameraAngleX;
+                const lunge = (now - lastSwordAt) < 200;                        // второй клик быстрее 0.2 с — выпад (как в скрипте Roblox)
+                lastSwordAt = now;
+                toolAct = { tool: 'sword', t: 0, done: false, lunge, hit: new Set(), dmg: lunge ? 30 : 10 };
+                if (lunge) { synthSound('lunge'); if (pBody) { pBody.velocity.y = Math.max(pBody.velocity.y, 14); const f = new THREE.Vector3(-Math.sin(cameraAngleX), 0, -Math.cos(cameraAngleX)); pBody.velocity.x += f.x * 8; pBody.velocity.z += f.z * 8; } }
+                else synthSound('swing');
+                return;
+            }
+            if (toolAct) return;
+            if (now < toolReadyAt[currentTool]) return;
             initAudio();
             toolReadyAt[currentTool] = now + TOOLS[currentTool].cooldown;
             toolAct = { tool: currentTool, t: 0, done: false };
             playerGroup.rotation.y = cameraAngleX;                 // персонаж разворачивается туда, куда смотрит камера
-            if (currentTool === 'sword') synthSound('swing');
         }
         function placeBomb() { if (currentTool === 'bomb') useTool(); }
 
@@ -2350,12 +2373,12 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
         function synthSound(kind) {
             try {
                 _synthCtx = _synthCtx || new (window.AudioContext || window.webkitAudioContext)();
-                const ac = _synthCtx, t0 = ac.currentTime, dur = kind === 'swing' ? 0.22 : 0.5;
+                const ac = _synthCtx, t0 = ac.currentTime, dur = kind === 'swing' ? 0.22 : kind === 'lunge' ? 0.32 : 0.5;
                 const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * dur), ac.sampleRate), ch = buf.getChannelData(0);
-                for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / ch.length, kind === 'swing' ? 1.5 : 2);
+                for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / ch.length, kind === 'launch' ? 2 : 1.5);
                 const src = ac.createBufferSource(); src.buffer = buf;
                 const f = ac.createBiquadFilter(), g = ac.createGain();
-                if (kind === 'swing') { f.type = 'bandpass'; f.Q.value = 2.5; f.frequency.setValueAtTime(500, t0); f.frequency.exponentialRampToValueAtTime(3200, t0 + dur); g.gain.value = 0.55 * masterVolume; }
+                if (kind === 'swing' || kind === 'lunge') { f.type = 'bandpass'; f.Q.value = 2.5; f.frequency.setValueAtTime(500, t0); f.frequency.exponentialRampToValueAtTime(3200, t0 + dur); g.gain.value = 0.55 * masterVolume; }
                 else { f.type = 'lowpass'; f.frequency.setValueAtTime(2600, t0); f.frequency.exponentialRampToValueAtTime(220, t0 + dur); g.gain.value = 0.8 * masterVolume; }
                 src.connect(f); f.connect(g); g.connect(ac.destination); src.start(t0);
             } catch (e) {}
@@ -2371,12 +2394,21 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
             }
             if (toolAct) {
                 toolAct.t += delta; const t = toolAct.t; let ang = 1.45, dur = 0.5;
-                if (toolAct.tool === 'sword') {                                      // резкий взмах сверху вниз
-                    dur = 0.42;
-                    if (t < 0.1) ang = 1.45 + (2.75 - 1.45) * (t / 0.1);
-                    else if (t < 0.2) ang = 2.75 + (0.3 - 2.75) * ((t - 0.1) / 0.1);
-                    else ang = 0.3 + (1.45 - 0.3) * Math.min(1, (t - 0.2) / 0.22);
-                    if (!toolAct.done && t >= 0.14) { toolAct.done = true; swordHit(); }
+                if (toolAct.tool === 'sword') {
+                    const sh = arm.userData.tools.sword;
+                    if (toolAct.lunge) {                                             // выпад: клинок вперёд, рука выброшена
+                        dur = 0.6; setSwordGrip(sh, 'out');
+                        ang = 1.45 + 0.1 * Math.sin(Math.min(1, t / 0.25) * Math.PI);
+                        if (t > 0.5) setSwordGrip(sh, 'up');
+                        if (t >= 0.05 && t <= 0.3) swordHit(toolAct, 11, 70);
+                    } else {                                                         // рубящий взмах сверху вниз
+                        dur = 0.42; setSwordGrip(sh, 'up');
+                        if (t < 0.1) ang = 1.45 + (2.75 - 1.45) * (t / 0.1);
+                        else if (t < 0.2) ang = 2.75 + (0.3 - 2.75) * ((t - 0.1) / 0.1);
+                        else ang = 0.3 + (1.45 - 0.3) * Math.min(1, (t - 0.2) / 0.22);
+                        if (t >= 0.1 && t <= 0.3) swordHit(toolAct, 9, 50);
+                    }
+                    if (t >= dur) setSwordGrip(sh, 'up');
                 } else if (toolAct.tool === 'bomb') {
                     dur = 0.55;
                     if (t < 0.12) ang = 1.45 + (2.5 - 1.45) * (t / 0.12);
@@ -2405,14 +2437,15 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
             if (dir) n.group.position.addScaledVector(dir, 1.3);
             if (n.health <= 0) npcDie(n); else playSound('oof');
         }
-        function swordHit() {
+        function swordHit(act, range, coneDeg) {
             const fwd = new THREE.Vector3(-Math.sin(playerGroup.rotation.y), 0, -Math.cos(playerGroup.rotation.y));
+            const minDot = Math.cos(coneDeg * Math.PI / 180);
             worldNPCs.forEach(n => {
-                if (n.isDead) return;
+                if (n.isDead || act.hit.has(n)) return;
                 const d = n.group.position.clone().sub(playerGroup.position), dy = Math.abs(d.y); d.y = 0;
-                const dist = d.length(); if (dist > 9 || dy > 6) return;
-                if (dist > 1.5 && d.normalize().dot(fwd) < 0.35) return;
-                npcHurt(n, 34, fwd);
+                const dist = d.length(); if (dist > range || dy > 6) return;
+                if (dist > 1.5 && d.normalize().dot(fwd) < minDot) return;
+                act.hit.add(n); npcHurt(n, act.dmg, fwd);
             });
         }
 
@@ -2445,16 +2478,18 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
             playerGroup.updateMatrixWorld(true); camera.updateMatrixWorld(true);
             const camDir = new THREE.Vector3(); camera.getWorldDirection(camDir);
             const camPos = camera.position.clone();
-            // точка прицела: луч от камеры (начинаем за спиной игрока, чтобы не попасть в самого себя)
-            const from = camPos.clone().addScaledVector(camDir, Math.max(0, cameraDistance) + 2.6);
-            const to = camPos.clone().addScaledVector(camDir, 400);
+            // точка прицела: луч из центра экрана; начинаем сразу за игроком, чтобы не попасть в него самого
+            const toPl = playerGroup.position.clone().add(new THREE.Vector3(0, 2.5, 0)).sub(camPos);
+            const startT = Math.max(0, toPl.dot(camDir)) + 1.8;
+            const from = camPos.clone().addScaledVector(camDir, startT);
+            const to = camPos.clone().addScaledVector(camDir, 500);
             const res = new CANNON.RaycastResult();
             PW.raycastClosest(new CANNON.Vec3(from.x, from.y, from.z), new CANNON.Vec3(to.x, to.y, to.z), {}, res);
             const target = (res.hasHit && res.body !== pBody) ? new THREE.Vector3(res.hitPointWorld.x, res.hitPointWorld.y, res.hitPointWorld.z) : to;
             const hold = new THREE.Vector3(); arm.userData.tools.rocket.getWorldPosition(hold);
-            let dir = target.clone().sub(hold).normalize();
-            if (dir.dot(camDir) < 0.2) dir = camDir.clone();
-            const start = hold.clone().addScaledVector(dir, 2.4);
+            let dir = target.clone().sub(hold);
+            if (dir.length() < 5 || dir.normalize().dot(camDir) < 0.3) dir = camDir.clone();
+            const start = hold.clone().addScaledVector(dir, 2.2);
             const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 3.2), new THREE.MeshBasicMaterial({ color: 0x2f6bff }));
             mesh.position.copy(start); mesh.lookAt(start.clone().add(dir)); scene.add(mesh);
             rockets.push({ mesh, dir, life: 14 });
@@ -2519,6 +2554,7 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
         function explodeAt(pos, expRadius, expForce, maxDmg) {
             pos = pos.clone();
             playSound('explosion');
+            crossDestroy(pos, expRadius, expForce);
             
             for(let i=0; i<15; i++){
                 const p = new THREE.Mesh(new THREE.BoxGeometry(0.8,0.8,0.8), new THREE.MeshBasicMaterial({color: 0xff4400}));
@@ -3357,46 +3393,62 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
         function crossF32(b64) { return r6Buf(b64, Float32Array); }
         function buildCrossroads() {
             const D = CROSS_DATA;
-            const mats = D.mats.map(m => new THREE.MeshLambertMaterial({ color: new THREE.Color(m.c), transparent: m.a < 1, opacity: m.a, depthWrite: m.a >= 1 }));
+            // цвета в OBJ записаны в линейном пространстве → переводим в sRGB, иначе карта выглядит слишком тёмной
+            const lin2s = (hex) => new THREE.Color(hex).convertLinearToSRGB();
+            const mats = D.mats.map(m => new THREE.MeshLambertMaterial({ color: lin2s(m.c), transparent: m.a < 1, opacity: m.a, depthWrite: m.a >= 1 }));
+            const vcMat = new THREE.MeshLambertMaterial({ vertexColors: true });                 // небольшие (разрушаемые) детали — по чанкам с цветом в вершинах
             const acc = mats.map(() => ({ p: [], n: [] }));
             const boxT = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
             const bp = boxT.attributes.position.array, bn = boxT.attributes.normal.array;
+            const cylCache = {};
             const v = new THREE.Vector3(), nn = new THREE.Vector3(), q = new THREE.Quaternion();
-            function push(a, pa, na, sx, sy, sz, cx, cy, cz) {
+            function push(a, pa, na, sx, sy, sz, cx, cy, cz, col) {
                 for (let i = 0; i < pa.length; i += 3) {
                     v.set(pa[i] * sx, pa[i + 1] * sy, pa[i + 2] * sz).applyQuaternion(q);
                     a.p.push(v.x + cx, v.y + cy, v.z + cz);
                     nn.set(na[i], na[i + 1], na[i + 2]).applyQuaternion(q); a.n.push(nn.x, nn.y, nn.z);
+                    if (col) { (a.c = a.c || []).push(col.r, col.g, col.b); }
                 }
             }
-            const world = (x, y, z, hx, hy, hz, qx, qy, qz, qw, shape) => {
+            const addBody = (x, y, z, hx, hy, hz, qq, shape) => {
                 const body = new CANNON.Body({ mass: 0, material: PMAT.plastic, shape: shape || new CANNON.Box(new CANNON.Vec3(hx, hy, hz)) });
-                body.position.set(x, y, z); body.quaternion.set(qx, qy, qz, qw);
+                body.position.set(x, y, z); body.quaternion.set(qq.x, qq.y, qq.z, qq.w);
                 body.aabbNeedsUpdate = true; body.computeAABB();
-                crossBodies.push({ body, x, y, z, r: Math.hypot(hx, hy, hz), active: false });
+                const cb = { body, x, y, z, r: Math.hypot(hx, hy, hz), active: false, dead: false };
+                crossBodies.push(cb); return cb;
             };
+            crossSmall = []; crossChunks = new Map();
+            const CH = 56;
+            function addSmall(piece) {
+                piece.alive = true;
+                const key = Math.floor(piece.cx / CH) + ',' + Math.floor(piece.cz / CH);
+                let ch = crossChunks.get(key); if (!ch) { ch = { pieces: [], mesh: null, dirty: true }; crossChunks.set(key, ch); }
+                piece.chunk = ch; ch.pieces.push(piece); crossSmall.push(piece);
+            }
             const B = crossF32(D.boxes);
             for (let i = 0; i < D.nb; i++) {
                 const o = i * 11, m = B[o] | 0, cx = B[o + 1], cy = B[o + 2], cz = B[o + 3], sx = B[o + 4], sy = B[o + 5], sz = B[o + 6];
                 q.set(B[o + 7], B[o + 8], B[o + 9], B[o + 10]);
-                push(acc[m], bp, bn, sx, sy, sz, cx, cy, cz);
-                world(cx, cy, cz, sx / 2, sy / 2, sz / 2, q.x, q.y, q.z, q.w);
+                const cb = addBody(cx, cy, cz, sx / 2, sy / 2, sz / 2, q);
+                if (D.mats[m].a >= 1 && sx * sy * sz < 100 && Math.max(sx, sy, sz) < 8) {
+                    addSmall({ kind: 'box', m, cx, cy, cz, sx, sy, sz, q: q.clone(), cb });
+                } else push(acc[m], bp, bn, sx, sy, sz, cx, cy, cz);
             }
             const C = crossF32(D.cyl);
             for (let i = 0; i < D.nc; i++) {
                 const o = i * 11, m = C[o] | 0, cx = C[o + 1], cy = C[o + 2], cz = C[o + 3], top = C[o + 4], bot = C[o + 5], h = C[o + 6];
                 q.set(C[o + 7], C[o + 8], C[o + 9], C[o + 10]);
-                const g = new THREE.CylinderGeometry(top, bot, h, 14).toNonIndexed();
-                push(acc[m], g.attributes.position.array, g.attributes.normal.array, 1, 1, 1, cx, cy, cz); g.dispose();
                 const r = Math.max(top, bot) * 0.9;
-                world(cx, cy, cz, r, h / 2, r, q.x, q.y, q.z, q.w);
+                const cb = addBody(cx, cy, cz, r, h / 2, r, q);
+                if (D.mats[m].a >= 1 && h < 6 && Math.max(top, bot) < 2.5) addSmall({ kind: 'cyl', m, cx, cy, cz, top, bot, h, q: q.clone(), cb, sx: r * 2, sy: h, sz: r * 2 });
+                else { const g = new THREE.CylinderGeometry(top, bot, h, 14).toNonIndexed(); push(acc[m], g.attributes.position.array, g.attributes.normal.array, 1, 1, 1, cx, cy, cz); g.dispose(); }
             }
             const S = crossF32(D.balls);
             for (let i = 0; i < D.ns; i++) {
                 const o = i * 5, m = S[o] | 0, cx = S[o + 1], cy = S[o + 2], cz = S[o + 3], r = S[o + 4];
                 const g = new THREE.SphereGeometry(r, 12, 8).toNonIndexed(); q.set(0, 0, 0, 1);
                 push(acc[m], g.attributes.position.array, g.attributes.normal.array, 1, 1, 1, cx, cy, cz); g.dispose();
-                world(cx, cy, cz, r, 0, 0, 0, 0, 0, 1, new CANNON.Sphere(r));
+                addBody(cx, cy, cz, r, 0, 0, q, new CANNON.Sphere(r));
             }
             acc.forEach((a, i) => {
                 if (!a.p.length) return;
@@ -3405,6 +3457,10 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
                 g.setAttribute('normal', new THREE.Float32BufferAttribute(a.n, 3));
                 const mesh = new THREE.Mesh(g, mats[i]); mesh.frustumCulled = false; scene.add(mesh);
             });
+            // чанки разрушаемых деталей
+            crossVcMat = vcMat; crossMatCols = D.mats.map(m => lin2s(m.c));
+            crossBoxT = { p: bp, n: bn }; crossCylCache = cylCache;
+            crossChunks.forEach(ch => { crossRebuildChunk(ch); });
             // декали с текстурами (вывески, логотипы на спавнах)
             const texCache = {};
             D.quads.forEach(Qd => {
@@ -3417,6 +3473,71 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
                 scene.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ map: t, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })));
             });
         }
+        let crossSmall = [], crossChunks = new Map(), crossVcMat = null, crossMatCols = [], crossBoxT = null, crossCylCache = {};
+        function crossRebuildChunk(ch) {
+            const a = { p: [], n: [], c: [] }, q = new THREE.Quaternion(), v = new THREE.Vector3(), nn = new THREE.Vector3();
+            ch.pieces.forEach(pc => {
+                if (!pc.alive) return;
+                let pa, na, sx = 1, sy = 1, sz = 1;
+                if (pc.kind === 'box') { pa = crossBoxT.p; na = crossBoxT.n; sx = pc.sx; sy = pc.sy; sz = pc.sz; }
+                else {
+                    const key = pc.top + '_' + pc.bot + '_' + pc.h;
+                    let g = crossCylCache[key]; if (!g) { const t = new THREE.CylinderGeometry(pc.top, pc.bot, pc.h, 12).toNonIndexed(); g = crossCylCache[key] = { p: t.attributes.position.array, n: t.attributes.normal.array }; }
+                    pa = g.p; na = g.n;
+                }
+                const col = crossMatCols[pc.m]; q.copy(pc.q);
+                for (let i = 0; i < pa.length; i += 3) {
+                    v.set(pa[i] * sx, pa[i + 1] * sy, pa[i + 2] * sz).applyQuaternion(q);
+                    a.p.push(v.x + pc.cx, v.y + pc.cy, v.z + pc.cz);
+                    nn.set(na[i], na[i + 1], na[i + 2]).applyQuaternion(q); a.n.push(nn.x, nn.y, nn.z);
+                    a.c.push(col.r, col.g, col.b);
+                }
+            });
+            if (ch.mesh) { scene.remove(ch.mesh); ch.mesh.geometry.dispose(); ch.mesh = null; }
+            if (!a.p.length) return;
+            const g = new THREE.BufferGeometry();
+            g.setAttribute('position', new THREE.Float32BufferAttribute(a.p, 3));
+            g.setAttribute('normal', new THREE.Float32BufferAttribute(a.n, 3));
+            g.setAttribute('color', new THREE.Float32BufferAttribute(a.c, 3));
+            g.computeBoundingSphere();
+            ch.mesh = new THREE.Mesh(g, crossVcMat); scene.add(ch.mesh);
+        }
+        // взрыв разрушает небольшие детали карты: они превращаются в обломки с физикой
+        function crossDestroy(pos, radius, force) {
+            if (currentGameMode !== 'crossroads' || !crossSmall.length) return;
+            const hit = [];
+            for (let i = 0; i < crossSmall.length; i++) {
+                const pc = crossSmall[i]; if (!pc.alive) continue;
+                const d = Math.hypot(pc.cx - pos.x, pc.cy - pos.y, pc.cz - pos.z);
+                if (d < radius) hit.push([d, pc]);
+            }
+            if (!hit.length) return;
+            hit.sort((a, b) => a[0] - b[0]);
+            const dirty = new Set(); let debris = 0;
+            hit.forEach(([d, pc]) => {
+                pc.alive = false; dirty.add(pc.chunk);
+                pc.cb.dead = true; if (pc.cb.active) { PW.removeBody(pc.cb.body); pc.cb.active = false; }
+                if (debris >= 70) return;                                              // остальные просто исчезают
+                debris++;
+                const dir = new THREE.Vector3(pc.cx - pos.x, pc.cy - pos.y + 0.5, pc.cz - pos.z).normalize();
+                const f = (1 - d / radius) * force * 0.6 + 4;
+                const col = '#' + crossMatCols[pc.m].getHexString();
+                const w = Math.max(0.3, pc.sx), h = Math.max(0.3, pc.sy), dd = Math.max(0.3, pc.sz);
+                createBrick(pc.cx, pc.cy - h / 2, pc.cz, w, h, dd, col);
+                const br = worldBricks[worldBricks.length - 1];
+                br.userData.debris = true; br.userData.indestructible = false;
+                br.quaternion.copy(pc.q); br.userData.body.quaternion.set(pc.q.x, pc.q.y, pc.q.z, pc.q.w);
+                physLaunch(br, dir.x * f, dir.y * f + f * 0.3, dir.z * f);
+            });
+            dirty.forEach(crossRebuildChunk);
+            // слишком много обломков — убираем самые старые
+            let n = 0; for (const m of dynBricks) if (m.userData.debris) n++;
+            for (let i = 0; n > 260 && i < dynBricks.length; ) {
+                const m = dynBricks[i];
+                if (m.userData.debris) { scene.remove(m); PW.removeBody(m.userData.body); dynBricks.splice(i, 1); const wi = worldBricks.indexOf(m); if (wi >= 0) worldBricks.splice(wi, 1); n--; } else i++;
+            }
+        }
+
         // физика статичных деталей включается только рядом с игроком, ракетами и бомбами
         function crossStream(delta, force) {
             crossTimer -= delta; if (crossTimer > 0 && !force) return; crossTimer = 0.3;
@@ -3424,7 +3545,7 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
             rockets.forEach(r => centers.push(r.mesh.position));
             activeBombs.forEach(b => { if (b.body) centers.push(b.mesh.position); });
             for (let i = 0; i < crossBodies.length; i++) {
-                const cb = crossBodies[i]; let dmin = 1e9;
+                const cb = crossBodies[i]; if (cb.dead) continue; let dmin = 1e9;
                 for (let k = 0; k < centers.length; k++) {
                     const c = centers[k], d = Math.hypot(c.x - cb.x, c.y - cb.y, c.z - cb.z) - cb.r; if (d < dmin) dmin = d;
                 }
@@ -3447,8 +3568,8 @@ const CROSS_DATA = {"mats":[{"c":"#00246b","a":1.0},{"c":"#2d3e58","a":1.0},{"c"
             renderer = new THREE.WebGLRenderer({ antialias: false });
             renderer.setSize(window.innerWidth, window.innerHeight);
             container.appendChild(renderer.domElement);
-            scene.add(new THREE.AmbientLight(0xffffff, 0.75));
-            const dl = new THREE.DirectionalLight(0xffffff, 0.55); dl.position.set(60, 120, 40); scene.add(dl);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.95));
+            const dl = new THREE.DirectionalLight(0xffffff, 0.65); dl.position.set(60, 120, 40); scene.add(dl);
             // страховочный пол глубоко под картой (падение за край → респавн)
             const gb = new CANNON.Body({ mass: 0, shape: new CANNON.Plane(), material: PMAT.ground });
             gb.quaternion.setFromEuler(-Math.PI / 2, 0, 0); gb.position.set(0, -60, 0); PW.addBody(gb);
